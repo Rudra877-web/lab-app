@@ -101,7 +101,7 @@ export default function TatList() {
             <ClipboardList size={19} strokeWidth={2.2} /> TPA List
           </h3>
           <p style={{ color: "var(--muted)", fontSize: "0.87rem", marginTop: "-0.4rem" }}>
-            Health India TAT, Visit Health aur Ericson ke liye Highlight Care checkbox use karo. Baki TPA names ke liye ye option nahi rahega.
+            Health India TPA, Visit Health aur Ericson ke liye Highlight Care checkbox use karo. Baki TPA names ke liye ye option nahi rahega.
           </p>
 
           <form onSubmit={addTat} className="tat-add-row no-print" style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap" }}>
