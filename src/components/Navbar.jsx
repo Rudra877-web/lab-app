@@ -20,7 +20,7 @@ export default function Navbar() {
         <Link to="/" className={isActive("/")}>Dashboard</Link>
         <Link to="/employees" className={isActive("/employees")}>Customer Records</Link>
         <Link to="/companies" className={isActive("/companies")}>Companies</Link>
-        <Link to="/tat-list" className={isActive("/tat-list")}>TAT List</Link>
+        <Link to="/tat-list" className={isActive("/tat-list")}>TPA List</Link>
       </nav>
       <div className="right">
         <button className="btn btn-secondary btn-sm" onClick={logout}>
