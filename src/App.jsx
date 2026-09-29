@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Employees from "./pages/Employees.jsx";
 import Companies from "./pages/Companies.jsx";
 import TatList from "./pages/TatList.jsx";
+import CustomerDetail from "./pages/CustomerDetail.jsx";
 
 function isLoggedIn() {
   return localStorage.getItem("lab_logged_in") === "true";
@@ -31,6 +32,14 @@ export default function App() {
         element={
           <PrivateRoute>
             <Employees />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/records/:id"
+        element={
+          <PrivateRoute>
+            <CustomerDetail />
           </PrivateRoute>
         }
       />

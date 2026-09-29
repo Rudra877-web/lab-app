@@ -5,7 +5,7 @@ import SetupBanner from "../components/SetupBanner.jsx";
 import { useToast } from "../components/Toast.jsx";
 import { supabase, friendlyError, isSupabaseConfigured } from "../supabaseClient.js";
 
-const HIGHLIGHT_CARE_TATS = new Set(["Health India TAT", "Visit Health", "Ericson"]);
+const HIGHLIGHT_CARE_TATS = new Set(["Health India TPA", "Health India TAT", "Visit Health", "Ericson"]);
 
 export default function TatList() {
   const { showToast, ToastEl } = useToast();
@@ -24,7 +24,16 @@ export default function TatList() {
       .select("*")
       .order("sort_order", { ascending: true });
     if (error) { setErrorMsg(friendlyError(error)); setLoading(false); return; }
-    setTatList(data || []);
+
+    const list = data || [];
+    // Auto-migrate legacy "Health India TAT" to "Health India TPA" if present in database
+    const legacyItem = list.find((t) => t.name === "Health India TAT");
+    if (legacyItem) {
+      await supabase.from("tat_list").update({ name: "Health India TPA" }).eq("id", legacyItem.id);
+      legacyItem.name = "Health India TPA";
+    }
+
+    setTatList(list);
     setLoading(false);
   }, []);
 

@@ -37,9 +37,13 @@ create table if not exists public.employee_records (
   tpa text,
   company_id uuid references public.companies(id) on delete restrict,
   service_type text,
+  visit_type text default 'Center Visit',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Migration for existing database tables:
+alter table public.employee_records add column if not exists visit_type text default 'Center Visit';
 
 create index if not exists idx_records_company on public.employee_records(company_id);
 create index if not exists idx_records_date on public.employee_records(record_date);
@@ -102,7 +106,7 @@ drop policy if exists "tat_list_all" on public.tat_list;
 create policy "tat_list_all" on public.tat_list for all using (true) with check (true);
 
 insert into public.tat_list (name, sort_order, highlight_care) values
-  ('Health India TAT', 1, '2'),
+  ('Health India TPA', 1, '2'),
   ('MD India', 2, null),
   ('Visit Health', 3, '2'),
   ('Ericson', 4, '2'),
@@ -114,10 +118,14 @@ insert into public.tat_list (name, sort_order, highlight_care) values
   ('Call Medi Health', 10, null)
 on conflict (name) do nothing;
 
+-- Update legacy name if previously seeded as 'Health India TAT'
+update public.tat_list set name = 'Health India TPA' where name = 'Health India TAT';
+update public.employee_records set tpa = replace(tpa, 'Health India TAT', 'Health India TPA') where tpa like '%Health India TAT%';
+
 -- If tat_list already existed from an earlier run, make sure these three
 -- are set to Highlight Care 2 as requested (safe to re-run any time).
 update public.tat_list set highlight_care = '2'
-  where name in ('Health India TAT', 'Visit Health', 'Ericson');
+  where name in ('Health India TPA', 'Visit Health', 'Ericson');
 
 -- ------------------------------------------------------------
 -- SEED DATA - company / TPA list from your handwritten notes.

@@ -1,24 +1,39 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Download, Printer, Save, X } from "lucide-react";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import { Download, Printer, Save, X, Eye } from "lucide-react";
 import Navbar from "../components/Navbar.jsx";
 import SetupBanner from "../components/SetupBanner.jsx";
 import { useToast } from "../components/Toast.jsx";
 import { supabase, friendlyError, isSupabaseConfigured } from "../supabaseClient.js";
 
 const SERVICE_TYPES = ["Pre-Employment Checkup", "Annual Health Checkup", "Insurance Medical Test", "Body Checkup", "OPD", "Other"];
-const HIGHLIGHT_CARE_TATS = new Set(["Health India TAT", "Visit Health", "Ericson"]);
+const HIGHLIGHT_CARE_TATS = new Set(["Health India TPA", "Health India TAT", "Visit Health", "Ericson"]);
 const HIGHLIGHT_CARE_SEPARATOR = " | Highlight Care ";
 const PAGE_SIZE = 15;
+
+function extractVisitType(r) {
+  if (r?.visit_type) return r.visit_type;
+  if (r?.rest) {
+    if (r.rest.includes("[Visit: Home Visit]")) return "Home Visit";
+    if (r.rest.includes("[Visit: Center Visit]")) return "Center Visit";
+  }
+  return "Center Visit";
+}
+
+function extractCleanRest(rawRest) {
+  return (rawRest || "").replace(/\s*\[Visit:\s*(Home Visit|Center Visit)\]/gi, "").trim();
+}
 
 const emptyForm = {
   id: "", record_date: new Date().toISOString().slice(0, 10), full_name: "", gender: "",
   age: "", height: "", weight: "", chest: "", abdomen: "", waist: "", hips: "",
   rest: "", tpa: "", company_id: "", service_type: "",
+  visit_type: "Center Visit",
 };
 
 export default function Employees() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const { showToast, ToastEl } = useToast();
 
   const [companies, setCompanies] = useState([]);
@@ -28,6 +43,7 @@ export default function Employees() {
   const [formError, setFormError] = useState("");
   const [editing, setEditing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [hasVisitTypeCol, setHasVisitTypeCol] = useState(true);
 
   const [records, setRecords] = useState([]);
   const [page, setPage] = useState(1);
@@ -41,10 +57,26 @@ export default function Employees() {
     tpa: "",
     date: "",
     service: "",
+    visit: "",
     sort: "record_date-desc",
   });
 
-  useEffect(() => { if (isSupabaseConfigured) { loadCompanies(); loadTatOptions(); } }, []);
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      loadCompanies();
+      loadTatOptions();
+      checkVisitTypeColumn();
+    }
+  }, []);
+
+  async function checkVisitTypeColumn() {
+    const { error } = await supabase.from("employee_records").select("visit_type").limit(1);
+    if (error && (error.code === "42703" || error.message?.includes("visit_type"))) {
+      setHasVisitTypeCol(false);
+    } else {
+      setHasVisitTypeCol(true);
+    }
+  }
 
   async function loadTatOptions() {
     const { data, error } = await supabase.from("tat_list").select("id,name").order("sort_order", { ascending: true });
@@ -79,6 +111,12 @@ export default function Employees() {
     const storedTpa = HIGHLIGHT_CARE_TATS.has(form.tpa) && tpaHighlightCare
       ? `${form.tpa}${HIGHLIGHT_CARE_SEPARATOR}${tpaHighlightCare}`
       : form.tpa;
+
+    const cleanRest = form.rest.trim();
+    const fallbackRest = cleanRest
+      ? `${cleanRest} [Visit: ${form.visit_type}]`
+      : `[Visit: ${form.visit_type}]`;
+
     const payload = {
       record_date: form.record_date,
       full_name: form.full_name.trim(),
@@ -90,17 +128,37 @@ export default function Employees() {
       abdomen: form.abdomen === "" ? null : Number(form.abdomen),
       waist: form.waist === "" ? null : Number(form.waist),
       hips: form.hips === "" ? null : Number(form.hips),
-      rest: form.rest.trim(),
+      rest: hasVisitTypeCol ? cleanRest : fallbackRest,
       tpa: storedTpa.trim(),
       company_id: form.company_id,
       service_type: form.service_type,
     };
+
+    if (hasVisitTypeCol) {
+      payload.visit_type = form.visit_type;
+    }
 
     let result;
     if (editing) {
       result = await supabase.from("employee_records").update(payload).eq("id", form.id);
     } else {
       result = await supabase.from("employee_records").insert(payload);
+    }
+
+    // Fallback if column does not exist yet in Supabase table
+    if (result.error && (result.error.code === "42703" || result.error.message?.includes("visit_type"))) {
+      setHasVisitTypeCol(false);
+      const fallbackPayload = {
+        ...payload,
+        rest: fallbackRest,
+      };
+      delete fallbackPayload.visit_type;
+
+      if (editing) {
+        result = await supabase.from("employee_records").update(fallbackPayload).eq("id", form.id);
+      } else {
+        result = await supabase.from("employee_records").insert(fallbackPayload);
+      }
     }
 
     if (result.error) { setFormError(friendlyError(result.error)); return; }
@@ -111,7 +169,7 @@ export default function Employees() {
   }
 
   function clearForm() {
-    setForm({ ...emptyForm, record_date: new Date().toISOString().slice(0, 10) });
+    setForm({ ...emptyForm, record_date: new Date().toISOString().slice(0, 10), visit_type: "Center Visit" });
     setTpaHighlightCare("");
     setEditing(false);
     setFormError("");
@@ -119,17 +177,36 @@ export default function Employees() {
 
   function startEdit(r) {
     const [tpaName, savedHighlightCare] = (r.tpa || "").split(HIGHLIGHT_CARE_SEPARATOR);
+    const vType = extractVisitType(r);
+    const cleanRest = extractCleanRest(r.rest);
     setForm({
       id: r.id, record_date: r.record_date, full_name: r.full_name, gender: r.gender || "",
       age: r.age ?? "", height: r.height ?? "", weight: r.weight ?? "", chest: r.chest ?? "",
-      abdomen: r.abdomen ?? "", waist: r.waist ?? "", hips: r.hips ?? "", rest: r.rest || "",
+      abdomen: r.abdomen ?? "", waist: r.waist ?? "", hips: r.hips ?? "", rest: cleanRest,
       tpa: tpaName || "", company_id: r.company_id || "", service_type: r.service_type || "",
+      visit_type: vType,
     });
     setTpaHighlightCare(savedHighlightCare || "");
     setEditing(true);
     setFormError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+
+  const editId = params.get("edit");
+  useEffect(() => {
+    if (editId && isSupabaseConfigured) {
+      supabase
+        .from("employee_records")
+        .select("*, companies(name)")
+        .eq("id", editId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (data && !error) {
+            startEdit(data);
+          }
+        });
+    }
+  }, [editId]);
 
   const loadRecords = useCallback(async () => {
     if (!isSupabaseConfigured) { setLoadingRecords(false); return; }
@@ -141,6 +218,13 @@ export default function Employees() {
     if (filters.tpa) query = query.ilike("tpa", `${filters.tpa}%`);
     if (filters.date) query = query.eq("record_date", filters.date);
     if (filters.service) query = query.eq("service_type", filters.service);
+    if (filters.visit) {
+      if (hasVisitTypeCol) {
+        query = query.eq("visit_type", filters.visit);
+      } else {
+        query = query.ilike("rest", `%[Visit: ${filters.visit}]%`);
+      }
+    }
     query = query.order(sortCol, { ascending: sortDir === "asc" });
 
     const from = (page - 1) * PAGE_SIZE;
@@ -151,11 +235,9 @@ export default function Employees() {
     setRecords(data || []);
     setTotalRows(count || 0);
     setLoadingRecords(false);
-  }, [filters, page]);
+  }, [filters, page, hasVisitTypeCol]);
 
   useEffect(() => { loadRecords(); }, [loadRecords]);
-
-  function applyFilters() { setPage(1); }
 
   async function confirmDelete() {
     const { error } = await supabase.from("employee_records").delete().eq("id", deleteId);
@@ -173,14 +255,22 @@ export default function Employees() {
     if (filters.tpa) query = query.ilike("tpa", `${filters.tpa}%`);
     if (filters.date) query = query.eq("record_date", filters.date);
     if (filters.service) query = query.eq("service_type", filters.service);
+    if (filters.visit) {
+      if (hasVisitTypeCol) {
+        query = query.eq("visit_type", filters.visit);
+      } else {
+        query = query.ilike("rest", `%[Visit: ${filters.visit}]%`);
+      }
+    }
     const { data, error } = await query.order(sortCol, { ascending: sortDir === "asc" });
     if (error) { showToast(friendlyError(error), true); return; }
     if (!data || data.length === 0) { showToast("Export karne ke liye koi record nahi hai.", true); return; }
 
-    const headers = ["Date","Full Name","Gender","Age","Height","Weight","Chest","Abdomen","Waist","Hips","Rest","TPA","Company","Service Type"];
+    const headers = ["Date","Full Name","Gender","Age","Height","Weight","Chest","Abdomen","Waist","Hips","Report","TPA","Company","Service Type","Visit Type"];
     const rows = data.map((r) => [
       r.record_date, r.full_name, r.gender, r.age, r.height, r.weight, r.chest, r.abdomen,
-      r.waist, r.hips, r.rest, r.tpa, r.companies?.name || "", r.service_type,
+      r.waist, r.hips, extractCleanRest(r.rest), r.tpa, r.companies?.name || "", r.service_type,
+      extractVisitType(r),
     ]);
     let csv = headers.join(",") + "\n";
     rows.forEach((row) => { csv += row.map((v) => `"${(v ?? "").toString().replace(/"/g, '""')}"`).join(",") + "\n"; });
@@ -198,6 +288,15 @@ export default function Employees() {
       <Navbar />
       <div className="container">
         <SetupBanner errorMessage={errorMsg} />
+
+        {!hasVisitTypeCol && (
+          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#1E40AF", padding: "0.6rem 0.9rem", borderRadius: "8px", fontSize: "0.82rem", marginBottom: "1rem" }}>
+            ℹ️ <strong>Supabase Note:</strong> Visit Type (Home / Center) bina rukawat ke save ho raha hai. Iska alag column database mein add karne ke liye Supabase SQL Editor mein run karein:
+            <code style={{ background: "rgba(0,0,0,0.06)", padding: "2px 6px", borderRadius: "4px", marginLeft: "6px", display: "inline-block", marginTop: "3px" }}>
+              ALTER TABLE public.employee_records ADD COLUMN IF NOT EXISTS visit_type text DEFAULT 'Center Visit';
+            </code>
+          </div>
+        )}
 
         <div className="card no-print">
           <h3 style={{ marginTop: 0 }}>{editing ? "Edit Customer Record" : "Add Customer Record"}</h3>
@@ -217,7 +316,7 @@ export default function Employees() {
               <div><label>Abdomen</label><input type="number" step="0.1" value={form.abdomen} onChange={(e) => updateForm("abdomen", e.target.value)} /></div>
               <div><label>Waist</label><input type="number" step="0.1" value={form.waist} onChange={(e) => updateForm("waist", e.target.value)} /></div>
               <div><label>Hips</label><input type="number" step="0.1" value={form.hips} onChange={(e) => updateForm("hips", e.target.value)} /></div>
-              <div><label>Rest</label><input type="text" value={form.rest} onChange={(e) => updateForm("rest", e.target.value)} /></div>
+              <div><label>Report</label><input type="text" placeholder="Enter report / medical findings" value={form.rest} onChange={(e) => updateForm("rest", e.target.value)} /></div>
               <div><label>TPA</label>
                 <select value={form.tpa} onChange={(e) => { updateForm("tpa", e.target.value); setTpaHighlightCare(""); }}>
                   <option value="">Select TPA</option>
@@ -244,6 +343,27 @@ export default function Employees() {
                   {SERVICE_TYPES.map((s) => <option key={s}>{s}</option>)}
                 </select>
               </div>
+              <div>
+                <label>Visit Type (Home / Center Visit) *</label>
+                <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", minHeight: "42px", flexWrap: "wrap", marginBottom: "0.95rem" }}>
+                  <label className={`visit-toggle-card ${form.visit_type === "Home Visit" ? "active" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={form.visit_type === "Home Visit"}
+                      onChange={(e) => updateForm("visit_type", e.target.checked ? "Home Visit" : "Center Visit")}
+                    />
+                    <span>🏠 Home Visit (Home se)</span>
+                  </label>
+                  <label className={`visit-toggle-card ${form.visit_type === "Center Visit" ? "active" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={form.visit_type === "Center Visit"}
+                      onChange={(e) => updateForm("visit_type", e.target.checked ? "Center Visit" : "Home Visit")}
+                    />
+                    <span>🏥 Center Visit (Enter visit)</span>
+                  </label>
+                </div>
+              </div>
             </div>
             {formError && <div className="error-text show">{formError}</div>}
             <div className="actions-row">
@@ -255,27 +375,36 @@ export default function Employees() {
 
         <div className="card">
           <h3 style={{ marginTop: 0 }}>All Records</h3>
+          <p style={{ color: "var(--muted)", fontSize: "0.84rem", marginTop: "-0.4rem", marginBottom: "0.9rem" }}>
+            💡 Kisi bhi customer record par <strong>Double Click</strong> karein uski saari details naye page par dekhne ke liye, ya <strong>View</strong> button dabayein.
+          </p>
           <div className="actions-row no-print">
-            <input type="text" placeholder="Search by name..." style={{ maxWidth: 220, marginBottom: 0 }}
+            <input type="text" placeholder="Search by name..." style={{ maxWidth: 200, marginBottom: 0 }}
               value={filters.search} onChange={(e) => { setFilters((f) => ({ ...f, search: e.target.value })); setPage(1); }} />
-            <select style={{ maxWidth: 220, marginBottom: 0 }} value={filters.company}
+            <select style={{ maxWidth: 200, marginBottom: 0 }} value={filters.company}
               onChange={(e) => { setFilters((f) => ({ ...f, company: e.target.value })); setPage(1); }}>
               <option value="">All Companies</option>
               {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            <select style={{ maxWidth: 200, marginBottom: 0 }} value={filters.tpa}
+            <select style={{ maxWidth: 170, marginBottom: 0 }} value={filters.tpa}
               onChange={(e) => { setFilters((f) => ({ ...f, tpa: e.target.value })); setPage(1); }}>
               <option value="">All TPAs</option>
               {tatOptions.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
             </select>
-            <input type="date" style={{ maxWidth: 170, marginBottom: 0 }} value={filters.date}
+            <select style={{ maxWidth: 160, marginBottom: 0 }} value={filters.visit}
+              onChange={(e) => { setFilters((f) => ({ ...f, visit: e.target.value })); setPage(1); }}>
+              <option value="">All Visit Types</option>
+              <option value="Home Visit">🏠 Home Visit</option>
+              <option value="Center Visit">🏥 Center Visit</option>
+            </select>
+            <input type="date" style={{ maxWidth: 160, marginBottom: 0 }} value={filters.date}
               onChange={(e) => { setFilters((f) => ({ ...f, date: e.target.value })); setPage(1); }} />
-            <select style={{ maxWidth: 200, marginBottom: 0 }} value={filters.service}
+            <select style={{ maxWidth: 180, marginBottom: 0 }} value={filters.service}
               onChange={(e) => { setFilters((f) => ({ ...f, service: e.target.value })); setPage(1); }}>
               <option value="">All Service Types</option>
               {SERVICE_TYPES.map((s) => <option key={s}>{s}</option>)}
             </select>
-            <select style={{ maxWidth: 170, marginBottom: 0 }} value={filters.sort}
+            <select style={{ maxWidth: 160, marginBottom: 0 }} value={filters.sort}
               onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value }))}>
               <option value="record_date-desc">Date (newest)</option>
               <option value="record_date-asc">Date (oldest)</option>
@@ -289,29 +418,63 @@ export default function Employees() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Date</th><th>Name</th><th>Gender</th><th>Age</th><th>Company</th><th>Service Type</th><th>TPA</th><th className="no-print">Actions</th></tr>
+                <tr>
+                  <th>Date</th>
+                  <th>Name</th>
+                  <th>Gender</th>
+                  <th>Age</th>
+                  <th>Company</th>
+                  <th>Service Type</th>
+                  <th>Visit Type</th>
+                  <th>TPA</th>
+                  <th className="no-print">Actions</th>
+                </tr>
               </thead>
               <tbody>
                 {loadingRecords ? (
-                  <tr><td colSpan={8} className="empty-state">Loading...</td></tr>
+                  <tr><td colSpan={9} className="empty-state">Loading...</td></tr>
                 ) : records.length === 0 ? (
-                  <tr><td colSpan={8} className="empty-state">Koi record nahi mila. Upar form se naya record add karein.</td></tr>
+                  <tr><td colSpan={9} className="empty-state">Koi record nahi mila. Upar form se naya record add karein.</td></tr>
                 ) : (
-                  records.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.record_date}</td>
-                      <td>{r.full_name}</td>
-                      <td>{r.gender || "-"}</td>
-                      <td>{r.age ?? "-"}</td>
-                      <td>{r.companies?.name || "-"}</td>
-                      <td>{r.service_type || "-"}</td>
-                      <td>{r.tpa || "-"}</td>
-                      <td className="no-print">
-                        <button className="btn btn-secondary btn-sm" onClick={() => startEdit(r)}>Edit</button>{" "}
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(r.id)}>Delete</button>
-                      </td>
-                    </tr>
-                  ))
+                  records.map((r) => {
+                    const vType = extractVisitType(r);
+                    return (
+                      <tr
+                        key={r.id}
+                        className="clickable-row"
+                        onDoubleClick={() => navigate(`/records/${r.id}`)}
+                        title="Double-click to view complete customer details"
+                      >
+                        <td>{r.record_date}</td>
+                        <td><strong>{r.full_name}</strong></td>
+                        <td>{r.gender || "-"}</td>
+                        <td>{r.age ?? "-"}</td>
+                        <td>{r.companies?.name || "-"}</td>
+                        <td>{r.service_type || "-"}</td>
+                        <td>
+                          <span className={`badge ${vType === "Home Visit" ? "badge-home" : "badge-center"}`}>
+                            {vType === "Home Visit" ? "🏠 Home" : "🏥 Center"}
+                          </span>
+                        </td>
+                        <td>{r.tpa || "-"}</td>
+                        <td className="no-print" style={{ whiteSpace: "nowrap" }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => navigate(`/records/${r.id}`)}
+                            title="View all details"
+                          >
+                            <Eye size={13} /> View
+                          </button>{" "}
+                          <button className="btn btn-secondary btn-sm" onClick={() => startEdit(r)}>
+                            Edit
+                          </button>{" "}
+                          <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(r.id)}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

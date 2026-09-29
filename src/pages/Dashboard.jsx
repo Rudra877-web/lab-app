@@ -5,6 +5,13 @@ import Navbar from "../components/Navbar.jsx";
 import SetupBanner from "../components/SetupBanner.jsx";
 import { supabase, friendlyError, isSupabaseConfigured } from "../supabaseClient.js";
 
+function extractVisitType(r) {
+  if (r?.visit_type) return r.visit_type;
+  if (r?.rest?.includes("[Visit: Home Visit]")) return "Home Visit";
+  if (r?.rest?.includes("[Visit: Center Visit]")) return "Center Visit";
+  return "Center Visit";
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState({ companies: 0, activeCompanies: 0, records: 0, today: 0 });
   const [recent, setRecent] = useState([]);
@@ -36,7 +43,7 @@ export default function Dashboard() {
     setLoading(true);
     const { data, error } = await supabase
       .from("employee_records")
-      .select("record_date, full_name, service_type, created_at, companies(name)")
+      .select("id, record_date, full_name, service_type, rest, created_at, companies(name)")
       .order("created_at", { ascending: false })
       .limit(8);
     if (error) { setErrorMsg(friendlyError(error)); setLoading(false); return; }
@@ -94,22 +101,35 @@ export default function Dashboard() {
           <h3 style={{ marginTop: 0 }}>Recent Records</h3>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th>Name</th><th>Company</th><th>Service Type</th><th>Added</th></tr></thead>
+              <thead><tr><th>Date</th><th>Name</th><th>Company</th><th>Service Type</th><th>Visit Type</th><th>Added</th></tr></thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={5} className="empty-state">Loading...</td></tr>
+                  <tr><td colSpan={6} className="empty-state">Loading...</td></tr>
                 ) : recent.length === 0 ? (
-                  <tr><td colSpan={5} className="empty-state">Abhi koi record nahi hai. "Quick Add Customer" se pehla record add karein.</td></tr>
+                  <tr><td colSpan={6} className="empty-state">Abhi koi record nahi hai. "Quick Add Customer" se pehla record add karein.</td></tr>
                 ) : (
-                  recent.map((r, i) => (
-                    <tr key={i}>
-                      <td>{r.record_date}</td>
-                      <td>{r.full_name}</td>
-                      <td>{r.companies?.name || "-"}</td>
-                      <td>{r.service_type || "-"}</td>
-                      <td>{new Date(r.created_at).toLocaleString()}</td>
-                    </tr>
-                  ))
+                  recent.map((r, i) => {
+                    const vType = extractVisitType(r);
+                    return (
+                      <tr
+                        key={r.id || i}
+                        className="clickable-row"
+                        onDoubleClick={() => r.id && navigate(`/records/${r.id}`)}
+                        title="Double-click to view complete details"
+                      >
+                        <td>{r.record_date}</td>
+                        <td><strong>{r.full_name}</strong></td>
+                        <td>{r.companies?.name || "-"}</td>
+                        <td>{r.service_type || "-"}</td>
+                        <td>
+                          <span className={`badge ${vType === "Home Visit" ? "badge-home" : "badge-center"}`}>
+                            {vType === "Home Visit" ? "🏠 Home" : "🏥 Center"}
+                          </span>
+                        </td>
+                        <td>{new Date(r.created_at).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
