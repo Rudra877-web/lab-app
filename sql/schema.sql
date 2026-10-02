@@ -38,12 +38,16 @@ create table if not exists public.employee_records (
   company_id uuid references public.companies(id) on delete restrict,
   service_type text,
   visit_type text default 'Center Visit',
+  branch_number text,
+  proposal_number text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 -- Migration for existing database tables:
 alter table public.employee_records add column if not exists visit_type text default 'Center Visit';
+alter table public.employee_records add column if not exists branch_number text;
+alter table public.employee_records add column if not exists proposal_number text;
 
 create index if not exists idx_records_company on public.employee_records(company_id);
 create index if not exists idx_records_date on public.employee_records(record_date);

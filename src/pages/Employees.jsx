@@ -20,8 +20,48 @@ function extractVisitType(r) {
   return "Center Visit";
 }
 
+function extractBranchNumber(r) {
+  if (r?.branch_number != null && r.branch_number !== "") return String(r.branch_number);
+  if (r?.branch_no != null && r.branch_no !== "") return String(r.branch_no);
+  if (r?.rest) {
+    const match = r.rest.match(/\[Branch:\s*([^\]]+)\]/i);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
+function extractProposalNumber(r) {
+  if (r?.proposal_number != null && r.proposal_number !== "") return String(r.proposal_number);
+  if (r?.proposal_no != null && r.proposal_no !== "") return String(r.proposal_no);
+  if (r?.rest) {
+    const match = r.rest.match(/\[Proposal:\s*([^\]]+)\]/i);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
 function extractCleanRest(rawRest) {
-  return (rawRest || "").replace(/\s*\[Visit:\s*(Home Visit|Center Visit)\]/gi, "").trim();
+  return (rawRest || "")
+    .replace(/\s*\[Visit:\s*(Home Visit|Center Visit)\]/gi, "")
+    .replace(/\s*\[Branch:\s*[^\]]+\]/gi, "")
+    .replace(/\s*\[Proposal:\s*[^\]]+\]/gi, "")
+    .trim();
+}
+
+function buildFallbackRest(cleanRest, visitType, branchNum, propNum, hasVisitCol, hasBranchCol, hasPropCol) {
+  const tags = [];
+  if (!hasVisitCol && visitType) {
+    tags.push(`[Visit: ${visitType}]`);
+  }
+  if (!hasBranchCol && branchNum && String(branchNum).trim()) {
+    tags.push(`[Branch: ${String(branchNum).trim()}]`);
+  }
+  if (!hasPropCol && propNum && String(propNum).trim()) {
+    tags.push(`[Proposal: ${String(propNum).trim()}]`);
+  }
+  if (tags.length === 0) return cleanRest;
+  const tagsStr = tags.join(" ");
+  return cleanRest ? `${cleanRest} ${tagsStr}` : tagsStr;
 }
 
 const emptyForm = {
@@ -29,6 +69,7 @@ const emptyForm = {
   age: "", height: "", weight: "", chest: "", abdomen: "", waist: "", hips: "",
   rest: "", tpa: "", company_id: "", service_type: "",
   visit_type: "Center Visit",
+  branch_number: "", proposal_number: "",
 };
 
 export default function Employees() {
@@ -44,6 +85,8 @@ export default function Employees() {
   const [editing, setEditing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [hasVisitTypeCol, setHasVisitTypeCol] = useState(true);
+  const [hasBranchCol, setHasBranchCol] = useState(true);
+  const [hasProposalCol, setHasProposalCol] = useState(true);
 
   const [records, setRecords] = useState([]);
   const [page, setPage] = useState(1);
@@ -65,16 +108,28 @@ export default function Employees() {
     if (isSupabaseConfigured) {
       loadCompanies();
       loadTatOptions();
-      checkVisitTypeColumn();
+      checkColumns();
     }
   }, []);
 
-  async function checkVisitTypeColumn() {
-    const { error } = await supabase.from("employee_records").select("visit_type").limit(1);
-    if (error && (error.code === "42703" || error.message?.includes("visit_type"))) {
+  async function checkColumns() {
+    try {
+      const vRes = await supabase.from("employee_records").select("visit_type").limit(1);
+      setHasVisitTypeCol(!vRes.error || vRes.error.code !== "42703");
+    } catch {
       setHasVisitTypeCol(false);
-    } else {
-      setHasVisitTypeCol(true);
+    }
+    try {
+      const bRes = await supabase.from("employee_records").select("branch_number").limit(1);
+      setHasBranchCol(!bRes.error || bRes.error.code !== "42703");
+    } catch {
+      setHasBranchCol(false);
+    }
+    try {
+      const pRes = await supabase.from("employee_records").select("proposal_number").limit(1);
+      setHasProposalCol(!pRes.error || pRes.error.code !== "42703");
+    } catch {
+      setHasProposalCol(false);
     }
   }
 
@@ -112,10 +167,7 @@ export default function Employees() {
       ? `${form.tpa}${HIGHLIGHT_CARE_SEPARATOR}${tpaHighlightCare}`
       : form.tpa;
 
-    const cleanRest = form.rest.trim();
-    const fallbackRest = cleanRest
-      ? `${cleanRest} [Visit: ${form.visit_type}]`
-      : `[Visit: ${form.visit_type}]`;
+    const cleanRest = extractCleanRest(form.rest);
 
     const payload = {
       record_date: form.record_date,
@@ -128,15 +180,15 @@ export default function Employees() {
       abdomen: form.abdomen === "" ? null : Number(form.abdomen),
       waist: form.waist === "" ? null : Number(form.waist),
       hips: form.hips === "" ? null : Number(form.hips),
-      rest: hasVisitTypeCol ? cleanRest : fallbackRest,
+      rest: buildFallbackRest(cleanRest, form.visit_type, form.branch_number, form.proposal_number, hasVisitTypeCol, hasBranchCol, hasProposalCol),
       tpa: storedTpa.trim(),
       company_id: form.company_id,
       service_type: form.service_type,
     };
 
-    if (hasVisitTypeCol) {
-      payload.visit_type = form.visit_type;
-    }
+    if (hasVisitTypeCol) payload.visit_type = form.visit_type;
+    if (hasBranchCol) payload.branch_number = form.branch_number.trim() || null;
+    if (hasProposalCol) payload.proposal_number = form.proposal_number.trim() || null;
 
     let result;
     if (editing) {
@@ -146,13 +198,30 @@ export default function Employees() {
     }
 
     // Fallback if column does not exist yet in Supabase table
-    if (result.error && (result.error.code === "42703" || result.error.message?.includes("visit_type"))) {
-      setHasVisitTypeCol(false);
-      const fallbackPayload = {
-        ...payload,
-        rest: fallbackRest,
-      };
-      delete fallbackPayload.visit_type;
+    if (result.error && (result.error.code === "42703" || result.error.message?.includes("does not exist"))) {
+      const errMsg = result.error.message || "";
+      const missingVisit = errMsg.includes("visit_type") || !hasVisitTypeCol;
+      const missingBranch = errMsg.includes("branch_number") || !hasBranchCol;
+      const missingProposal = errMsg.includes("proposal_number") || !hasProposalCol;
+
+      if (missingVisit) setHasVisitTypeCol(false);
+      if (missingBranch) setHasBranchCol(false);
+      if (missingProposal) setHasProposalCol(false);
+
+      const fallbackPayload = { ...payload };
+      if (missingVisit) delete fallbackPayload.visit_type;
+      if (missingBranch) delete fallbackPayload.branch_number;
+      if (missingProposal) delete fallbackPayload.proposal_number;
+
+      fallbackPayload.rest = buildFallbackRest(
+        cleanRest,
+        form.visit_type,
+        form.branch_number,
+        form.proposal_number,
+        !missingVisit,
+        !missingBranch,
+        !missingProposal
+      );
 
       if (editing) {
         result = await supabase.from("employee_records").update(fallbackPayload).eq("id", form.id);
@@ -169,7 +238,13 @@ export default function Employees() {
   }
 
   function clearForm() {
-    setForm({ ...emptyForm, record_date: new Date().toISOString().slice(0, 10), visit_type: "Center Visit" });
+    setForm({
+      ...emptyForm,
+      record_date: new Date().toISOString().slice(0, 10),
+      visit_type: "Center Visit",
+      branch_number: "",
+      proposal_number: "",
+    });
     setTpaHighlightCare("");
     setEditing(false);
     setFormError("");
@@ -178,6 +253,8 @@ export default function Employees() {
   function startEdit(r) {
     const [tpaName, savedHighlightCare] = (r.tpa || "").split(HIGHLIGHT_CARE_SEPARATOR);
     const vType = extractVisitType(r);
+    const branchNum = extractBranchNumber(r);
+    const propNum = extractProposalNumber(r);
     const cleanRest = extractCleanRest(r.rest);
     setForm({
       id: r.id, record_date: r.record_date, full_name: r.full_name, gender: r.gender || "",
@@ -185,11 +262,12 @@ export default function Employees() {
       abdomen: r.abdomen ?? "", waist: r.waist ?? "", hips: r.hips ?? "", rest: cleanRest,
       tpa: tpaName || "", company_id: r.company_id || "", service_type: r.service_type || "",
       visit_type: vType,
+      branch_number: branchNum,
+      proposal_number: propNum,
     });
     setTpaHighlightCare(savedHighlightCare || "");
     setEditing(true);
     setFormError("");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const editId = params.get("edit");
@@ -213,7 +291,14 @@ export default function Employees() {
     setLoadingRecords(true);
     const [sortCol, sortDir] = filters.sort.split("-");
     let query = supabase.from("employee_records").select("*, companies(name)", { count: "exact" });
-    if (filters.search) query = query.ilike("full_name", `%${filters.search}%`);
+    if (filters.search) {
+      const cleanSearch = filters.search.replace(/,/g, "").trim();
+      if (hasBranchCol && hasProposalCol) {
+        query = query.or(`full_name.ilike.%${cleanSearch}%,branch_number.ilike.%${cleanSearch}%,proposal_number.ilike.%${cleanSearch}%`);
+      } else {
+        query = query.ilike("full_name", `%${cleanSearch}%`);
+      }
+    }
     if (filters.company) query = query.eq("company_id", filters.company);
     if (filters.tpa) query = query.ilike("tpa", `${filters.tpa}%`);
     if (filters.date) query = query.eq("record_date", filters.date);
@@ -235,7 +320,7 @@ export default function Employees() {
     setRecords(data || []);
     setTotalRows(count || 0);
     setLoadingRecords(false);
-  }, [filters, page, hasVisitTypeCol]);
+  }, [filters, page, hasVisitTypeCol, hasBranchCol, hasProposalCol]);
 
   useEffect(() => { loadRecords(); }, [loadRecords]);
 
@@ -250,7 +335,14 @@ export default function Employees() {
   async function exportCSV() {
     const [sortCol, sortDir] = filters.sort.split("-");
     let query = supabase.from("employee_records").select("*, companies(name)");
-    if (filters.search) query = query.ilike("full_name", `%${filters.search}%`);
+    if (filters.search) {
+      const cleanSearch = filters.search.replace(/,/g, "").trim();
+      if (hasBranchCol && hasProposalCol) {
+        query = query.or(`full_name.ilike.%${cleanSearch}%,branch_number.ilike.%${cleanSearch}%,proposal_number.ilike.%${cleanSearch}%`);
+      } else {
+        query = query.ilike("full_name", `%${cleanSearch}%`);
+      }
+    }
     if (filters.company) query = query.eq("company_id", filters.company);
     if (filters.tpa) query = query.ilike("tpa", `${filters.tpa}%`);
     if (filters.date) query = query.eq("record_date", filters.date);
@@ -266,10 +358,28 @@ export default function Employees() {
     if (error) { showToast(friendlyError(error), true); return; }
     if (!data || data.length === 0) { showToast("Export karne ke liye koi record nahi hai.", true); return; }
 
-    const headers = ["Date","Full Name","Gender","Age","Height","Weight","Chest","Abdomen","Waist","Hips","Report","TPA","Company","Service Type","Visit Type"];
+    const headers = [
+      "Date", "Full Name", "Gender", "Age", "Company", "Branch Number", "Proposal Number",
+      "Height", "Weight", "Chest", "Abdomen", "Waist", "Hips",
+      "Report", "TPA", "Service Type", "Visit Type"
+    ];
     const rows = data.map((r) => [
-      r.record_date, r.full_name, r.gender, r.age, r.height, r.weight, r.chest, r.abdomen,
-      r.waist, r.hips, extractCleanRest(r.rest), r.tpa, r.companies?.name || "", r.service_type,
+      r.record_date,
+      r.full_name,
+      r.gender,
+      r.age,
+      r.companies?.name || "",
+      extractBranchNumber(r),
+      extractProposalNumber(r),
+      r.height,
+      r.weight,
+      r.chest,
+      r.abdomen,
+      r.waist,
+      r.hips,
+      extractCleanRest(r.rest),
+      r.tpa,
+      r.service_type,
       extractVisitType(r),
     ]);
     let csv = headers.join(",") + "\n";
@@ -289,11 +399,13 @@ export default function Employees() {
       <div className="container">
         <SetupBanner errorMessage={errorMsg} />
 
-        {!hasVisitTypeCol && (
-          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#1E40AF", padding: "0.6rem 0.9rem", borderRadius: "8px", fontSize: "0.82rem", marginBottom: "1rem" }}>
-            ℹ️ <strong>Supabase Note:</strong> Visit Type (Home / Center) bina rukawat ke save ho raha hai. Iska alag column database mein add karne ke liye Supabase SQL Editor mein run karein:
-            <code style={{ background: "rgba(0,0,0,0.06)", padding: "2px 6px", borderRadius: "4px", marginLeft: "6px", display: "inline-block", marginTop: "3px" }}>
-              ALTER TABLE public.employee_records ADD COLUMN IF NOT EXISTS visit_type text DEFAULT 'Center Visit';
+        {(!hasVisitTypeCol || !hasBranchCol || !hasProposalCol) && (
+          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#1E40AF", padding: "0.75rem 1rem", borderRadius: "8px", fontSize: "0.83rem", marginBottom: "1rem" }}>
+            ℹ️ <strong>Supabase Note:</strong> Visit Type, Branch Number aur Proposal Number bina rukawat ke save ho rahe hain. Inke alag columns database mein add karne ke liye Supabase SQL Editor mein run karein:
+            <code style={{ background: "rgba(0,0,0,0.06)", padding: "6px 10px", borderRadius: "4px", display: "block", marginTop: "6px", fontFamily: "monospace", fontSize: "0.8rem", whiteSpace: "pre-wrap" }}>
+{`ALTER TABLE public.employee_records ADD COLUMN IF NOT EXISTS visit_type text DEFAULT 'Center Visit';
+ALTER TABLE public.employee_records ADD COLUMN IF NOT EXISTS branch_number text;
+ALTER TABLE public.employee_records ADD COLUMN IF NOT EXISTS proposal_number text;`}
             </code>
           </div>
         )}
@@ -310,13 +422,36 @@ export default function Employees() {
                 </select>
               </div>
               <div><label>Age *</label><input type="number" min="0" max="120" value={form.age} onChange={(e) => updateForm("age", e.target.value)} required /></div>
-              <div><label>Height (cm)</label><input type="number" step="0.1" value={form.height} onChange={(e) => updateForm("height", e.target.value)} /></div>
-              <div><label>Weight (kg)</label><input type="number" step="0.1" value={form.weight} onChange={(e) => updateForm("weight", e.target.value)} /></div>
-              <div><label>Chest</label><input type="number" step="0.1" value={form.chest} onChange={(e) => updateForm("chest", e.target.value)} /></div>
-              <div><label>Abdomen</label><input type="number" step="0.1" value={form.abdomen} onChange={(e) => updateForm("abdomen", e.target.value)} /></div>
-              <div><label>Waist</label><input type="number" step="0.1" value={form.waist} onChange={(e) => updateForm("waist", e.target.value)} /></div>
-              <div><label>Hips</label><input type="number" step="0.1" value={form.hips} onChange={(e) => updateForm("hips", e.target.value)} /></div>
-              <div><label>Report</label><input type="text" placeholder="Enter report / medical findings" value={form.rest} onChange={(e) => updateForm("rest", e.target.value)} /></div>
+              <div><label>Company Name *</label>
+                <select value={form.company_id} onChange={(e) => updateForm("company_id", e.target.value)} required>
+                  <option value="">Select company</option>
+                  {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label>Branch Number</label>
+                <input
+                  type="text"
+                  placeholder="Enter branch number"
+                  value={form.branch_number}
+                  onChange={(e) => updateForm("branch_number", e.target.value)}
+                />
+              </div>
+              <div>
+                <label>Proposal Number</label>
+                <input
+                  type="text"
+                  placeholder="Enter proposal number"
+                  value={form.proposal_number}
+                  onChange={(e) => updateForm("proposal_number", e.target.value)}
+                />
+              </div>
+              <div><label>Service Type *</label>
+                <select value={form.service_type} onChange={(e) => updateForm("service_type", e.target.value)} required>
+                  <option value="">Select</option>
+                  {SERVICE_TYPES.map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </div>
               <div><label>TPA</label>
                 <select value={form.tpa} onChange={(e) => { updateForm("tpa", e.target.value); setTpaHighlightCare(""); }}>
                   <option value="">Select TPA</option>
@@ -331,18 +466,13 @@ export default function Employees() {
                   <option value="2">Highlight Care 2</option>
                 </select>
               </div>}
-              <div><label>Company Name *</label>
-                <select value={form.company_id} onChange={(e) => updateForm("company_id", e.target.value)} required>
-                  <option value="">Select company</option>
-                  {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div><label>Service Type *</label>
-                <select value={form.service_type} onChange={(e) => updateForm("service_type", e.target.value)} required>
-                  <option value="">Select</option>
-                  {SERVICE_TYPES.map((s) => <option key={s}>{s}</option>)}
-                </select>
-              </div>
+              <div><label>Height (cm)</label><input type="number" step="0.1" value={form.height} onChange={(e) => updateForm("height", e.target.value)} /></div>
+              <div><label>Weight (kg)</label><input type="number" step="0.1" value={form.weight} onChange={(e) => updateForm("weight", e.target.value)} /></div>
+              <div><label>Chest</label><input type="number" step="0.1" value={form.chest} onChange={(e) => updateForm("chest", e.target.value)} /></div>
+              <div><label>Abdomen</label><input type="number" step="0.1" value={form.abdomen} onChange={(e) => updateForm("abdomen", e.target.value)} /></div>
+              <div><label>Waist</label><input type="number" step="0.1" value={form.waist} onChange={(e) => updateForm("waist", e.target.value)} /></div>
+              <div><label>Hips</label><input type="number" step="0.1" value={form.hips} onChange={(e) => updateForm("hips", e.target.value)} /></div>
+              <div><label>Report</label><input type="text" placeholder="Enter report / medical findings" value={form.rest} onChange={(e) => updateForm("rest", e.target.value)} /></div>
               <div>
                 <label>Visit Type (Home / Center Visit) *</label>
                 <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", minHeight: "42px", flexWrap: "wrap", marginBottom: "0.95rem" }}>
@@ -379,7 +509,7 @@ export default function Employees() {
             💡 Kisi bhi customer record par <strong>Double Click</strong> karein uski saari details naye page par dekhne ke liye, ya <strong>View</strong> button dabayein.
           </p>
           <div className="actions-row no-print">
-            <input type="text" placeholder="Search by name..." style={{ maxWidth: 200, marginBottom: 0 }}
+            <input type="text" placeholder="Search by name, branch, proposal..." style={{ maxWidth: 220, marginBottom: 0 }}
               value={filters.search} onChange={(e) => { setFilters((f) => ({ ...f, search: e.target.value })); setPage(1); }} />
             <select style={{ maxWidth: 200, marginBottom: 0 }} value={filters.company}
               onChange={(e) => { setFilters((f) => ({ ...f, company: e.target.value })); setPage(1); }}>
@@ -424,6 +554,8 @@ export default function Employees() {
                   <th>Gender</th>
                   <th>Age</th>
                   <th>Company</th>
+                  <th>Branch No.</th>
+                  <th>Proposal No.</th>
                   <th>Service Type</th>
                   <th>Visit Type</th>
                   <th>TPA</th>
@@ -432,12 +564,14 @@ export default function Employees() {
               </thead>
               <tbody>
                 {loadingRecords ? (
-                  <tr><td colSpan={9} className="empty-state">Loading...</td></tr>
+                  <tr><td colSpan={11} className="empty-state">Loading...</td></tr>
                 ) : records.length === 0 ? (
-                  <tr><td colSpan={9} className="empty-state">Koi record nahi mila. Upar form se naya record add karein.</td></tr>
+                  <tr><td colSpan={11} className="empty-state">Koi record nahi mila. Upar form se naya record add karein.</td></tr>
                 ) : (
                   records.map((r) => {
                     const vType = extractVisitType(r);
+                    const branchNum = extractBranchNumber(r);
+                    const propNum = extractProposalNumber(r);
                     return (
                       <tr
                         key={r.id}
@@ -450,6 +584,8 @@ export default function Employees() {
                         <td>{r.gender || "-"}</td>
                         <td>{r.age ?? "-"}</td>
                         <td>{r.companies?.name || "-"}</td>
+                        <td>{branchNum || "-"}</td>
+                        <td>{propNum || "-"}</td>
                         <td>{r.service_type || "-"}</td>
                         <td>
                           <span className={`badge ${vType === "Home Visit" ? "badge-home" : "badge-center"}`}>

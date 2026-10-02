@@ -31,8 +31,32 @@ function extractVisitType(r) {
   return "Center Visit";
 }
 
+function extractBranchNumber(r) {
+  if (r?.branch_number != null && r.branch_number !== "") return String(r.branch_number);
+  if (r?.branch_no != null && r.branch_no !== "") return String(r.branch_no);
+  if (r?.rest) {
+    const match = r.rest.match(/\[Branch:\s*([^\]]+)\]/i);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
+function extractProposalNumber(r) {
+  if (r?.proposal_number != null && r.proposal_number !== "") return String(r.proposal_number);
+  if (r?.proposal_no != null && r.proposal_no !== "") return String(r.proposal_no);
+  if (r?.rest) {
+    const match = r.rest.match(/\[Proposal:\s*([^\]]+)\]/i);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
 function extractCleanReport(rawRest) {
-  return (rawRest || "").replace(/\s*\[Visit:\s*(Home Visit|Center Visit)\]/gi, "").trim();
+  return (rawRest || "")
+    .replace(/\s*\[Visit:\s*(Home Visit|Center Visit)\]/gi, "")
+    .replace(/\s*\[Branch:\s*[^\]]+\]/gi, "")
+    .replace(/\s*\[Proposal:\s*[^\]]+\]/gi, "")
+    .trim();
 }
 
 function calculateBMI(heightCm, weightKg) {
@@ -121,6 +145,8 @@ export default function CustomerDetail() {
   }
 
   const visitType = record ? extractVisitType(record) : "Center Visit";
+  const branchNumber = record ? extractBranchNumber(record) : "";
+  const proposalNumber = record ? extractProposalNumber(record) : "";
   const reportNotes = record ? extractCleanReport(record.rest) : "";
   const bmiInfo = record ? calculateBMI(record.height, record.weight) : null;
 
@@ -194,6 +220,8 @@ export default function CustomerDetail() {
                 <div style={{ textAlign: "right", fontSize: "9pt", color: "#666" }}>
                   <div><strong>Print Date:</strong> {new Date().toLocaleDateString()}</div>
                   <div><strong>Record ID:</strong> {record.id.slice(0, 8)}</div>
+                  {branchNumber && <div><strong>Branch No:</strong> {branchNumber}</div>}
+                  {proposalNumber && <div><strong>Proposal No:</strong> {proposalNumber}</div>}
                 </div>
               </div>
             </div>
@@ -216,6 +244,8 @@ export default function CustomerDetail() {
                     <span className="tag-item">Gender: <strong>{record.gender || "Not specified"}</strong></span>
                     <span className="tag-item">Age: <strong>{record.age} yrs</strong></span>
                     <span className="tag-item"><Building2 size={13} /> {record.companies?.name || "No Company"}</span>
+                    {branchNumber && <span className="tag-item">Branch: <strong>{branchNumber}</strong></span>}
+                    {proposalNumber && <span className="tag-item">Proposal: <strong>{proposalNumber}</strong></span>}
                   </div>
                 </div>
               </div>
@@ -248,6 +278,18 @@ export default function CustomerDetail() {
                     <span className="info-key">Company Name</span>
                     <span className="info-val strong" style={{ color: "var(--primary-dark)" }}>
                       {record.companies?.name || "-"}
+                    </span>
+                  </div>
+                  <div className="info-kv">
+                    <span className="info-key">Branch Number</span>
+                    <span className="info-val strong">
+                      {branchNumber || "-"}
+                    </span>
+                  </div>
+                  <div className="info-kv">
+                    <span className="info-key">Proposal Number</span>
+                    <span className="info-val strong">
+                      {proposalNumber || "-"}
                     </span>
                   </div>
                   <div className="info-kv">
